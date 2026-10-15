@@ -27,4 +27,4 @@ std::optional<MockDetection> MockFPGA::poll(std::uint32_t rover_step) {
     return detection;
 }
 
-} // namespace ares
+} 
