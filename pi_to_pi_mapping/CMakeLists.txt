@@ -10,7 +10,7 @@ add_library(ares_shared
 )
 target_include_directories(ares_shared PUBLIC include)
 
-add_executable(rover src/rover.cpp)
+add_executable(rover src/rover.cpp src/mock_fpga.cpp)
 target_link_libraries(rover PRIVATE ares_shared)
 
 add_executable(operator src/operator.cpp src/grid_map.cpp)
