@@ -1,0 +1,3 @@
+this is just a test. it has no GPS which we will need but it helps to give an idea and build. we still need to think how we will communicate from FPGA to pi since we will need to send the video over via ethernet orr maybe spi. need to see pros and cons for that/
+
+this just makes  a text map and i use 2 pis that i have to simulate wifi communication between what would be the user and their app and pi 1(the rover). This was a success and helped us realize how we should communicate between the 2 since we will be sending over an image if possible. The sizes of the data sent and really all of it will be changed later on once we start adding more things but for now its a good system / rough draft.

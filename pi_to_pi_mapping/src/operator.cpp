@@ -10,7 +10,7 @@
 #include <string>
 #include <sys/socket.h>
 #include <unistd.h>
-
+// Operator implementation for handling rover communications and grid visualization this is just a temp
 namespace {
 
 volatile std::sig_atomic_t keep_running = 1;
@@ -70,7 +70,7 @@ int main(int argc, char* argv[]) {
         std::cerr << "Invalid port (expected 1-65535)\n";
         return 1;
     }
-    // Do not restart blocking accept()/recv() after Ctrl+C.
+    
     struct sigaction interrupt_action{};
     interrupt_action.sa_handler = stopOnInterrupt;
     sigemptyset(&interrupt_action.sa_mask);

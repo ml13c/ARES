@@ -153,7 +153,7 @@ int main(int argc, char* argv[]) {
         }
 
         ++sequence;
-        // Sleep in small intervals so Ctrl+C exits promptly.
+        // so ctrl c can work
         for (int i = 0; i < 10 && keep_running; ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }

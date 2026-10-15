@@ -1,7 +1,7 @@
 #include "mock_fpga.hpp"
 
 #include <random>
-
+//this just simulates the FPGA for testing purposes. It generates a random detection every 3-7 rover position updates, with a random type of hazard.
 namespace ares {
 
 MockFPGA::MockFPGA() : rng_(std::random_device{}()) {

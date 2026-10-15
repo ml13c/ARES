@@ -2,7 +2,7 @@
 
 #include <sstream>
 #include <string>
-
+//temporary map for this test
 namespace ares {
 
 GridMap::GridMap(int width, int height) : width_(width), height_(height) {}

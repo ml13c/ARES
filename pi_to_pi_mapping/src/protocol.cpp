@@ -5,7 +5,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
-
+// thisi simulates what will be sent to the operator from the rover
 namespace ares {
 namespace {
 
