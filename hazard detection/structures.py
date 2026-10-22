@@ -10,6 +10,22 @@ import time
 H_4K = 2160
 W_4K = 3840
 
+# GrayImage
+@dataclass
+class GrayImage:
+    pix: np.ndarray # shape => (2160,3840), uint8
+    img_id: int
+
+    # from_file -> mostly useful for testing, otherwise GrayImage is created from GrayscaleConverter
+    @classmethod
+    def from_file(cls, path: str, img_id: int) -> "GrayImage":
+        gray = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+
+        if gray is None:
+            raise FileNotFoundError(f"could not read image: {path}")
+
+        return cls(gray, img_id)
+
 # Image
 @dataclass
 class Image:
@@ -43,24 +59,13 @@ class Image:
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         return cls(rgb, img_id, time.time())
 
+    def to_gray(self) -> GrayImage:
+        gray = cv2.cvtColor(self.pix, cv2.COLOR_RGB2GRAY)
+        return GrayImage(gray, self.img_id)
+
     #TODO: Need to have a method that imports directly from frame.
         #i.e. CV2 capture is sent to this...
 
-# GrayImage
-@dataclass
-class GrayImage:
-    pix: np.ndarray # shape => (2160,3840), uint8
-    img_id: int
-
-    # from_file -> mostly useful for testing, otherwise GrayImage is created from GrayscaleConverter
-    @classmethod
-    def from_file(cls, path: str, img_id: int) -> "GrayImage":
-        gray = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-
-        if gray is None:
-            raise FileNotFoundError(f"could not read image: {path}")
-
-        return cls(gray, img_id)
 
 # EdgeMap
 @dataclass
