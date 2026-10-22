@@ -8,7 +8,7 @@ import time
 
 # Constants
 H_4K = 2160
-W_4K = 4840
+W_4K = 3840
 
 # Image
 @dataclass
