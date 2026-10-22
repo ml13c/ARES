@@ -1,1 +1,4 @@
 .vscode
+/hazard detection/test.py
+/test_images/
+.venv
