@@ -1,0 +1,10 @@
+^C:\USERS\MENDE\ONEDRIVE\DOCUMENTS\GITHUB\ARES\MISSION_PLANNER\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/mende/OneDrive/Documents/GitHub/ARES/mission_planner -BC:/Users/mende/OneDrive/Documents/GitHub/ARES/mission_planner/build --check-stamp-file C:/Users/mende/OneDrive/Documents/GitHub/ARES/mission_planner/build/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

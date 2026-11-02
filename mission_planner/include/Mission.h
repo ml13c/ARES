@@ -2,24 +2,36 @@
 #define MISSION_H
 
 #include <vector>
-#include "Waypoint.h"
 
+#include "Waypoint.h"
 
 class Mission
 {
-
 private:
 
-    std::vector<Waypoint> waypoints;
+    std::vector<Waypoint> fieldBoundary;
 
+    std::vector<Waypoint> route;
+
+    Waypoint robotPosition;
+
+    Waypoint startPoint;
 
 public:
 
-    void addWaypoint(Waypoint point);
+    void addBoundaryPoint(const Waypoint& point);
 
-    std::vector<Waypoint> getWaypoints();
+    void setRobotPosition(const Waypoint& point);
 
+    void determineStartPoint();
+
+    void generateRoute();
+
+    bool validateRoute() const;
+
+    const std::vector<Waypoint>& getRoute() const;
+
+    const std::vector<Waypoint>& getBoundary() const;
 };
-
 
 #endif

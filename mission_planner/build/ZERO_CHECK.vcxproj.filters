@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\mende\OneDrive\Documents\GitHub\ARES\mission_planner\build\CMakeFiles\91bf98908463ba8a53b3fb0bff2c30f9\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{E31A171C-2144-35D1-883B-F503E17004C6}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
