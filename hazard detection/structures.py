@@ -79,6 +79,7 @@ class Tile:
     data: np.ndarray # shape depends on TileSplitter
     offset_x: int
     offset_y: int
+    img_id: int
 
 # BoundingBox
 @dataclass
