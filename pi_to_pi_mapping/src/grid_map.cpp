@@ -1,5 +1,6 @@
 #include "grid_map.hpp"
 
+#include <iomanip>
 #include <sstream>
 #include <string>
 //temporary map for this test
@@ -57,7 +58,13 @@ std::string GridMap::render() const {
     for (const auto& entry : hazards_) {
         const Message& hazard = entry.second;
         out << "  #" << hazard.id << " " << objectTypeName(hazard.object_type)
-            << " at (" << hazard.x << ", " << hazard.y << ")\n";
+            << " at grid (" << hazard.x << ", " << hazard.y << ")";
+        if (hazard.has_geo) {
+            out << std::fixed << std::setprecision(7)
+                << " GPS (" << hazard.latitude_deg << ", "
+                << hazard.longitude_deg << ")";
+        }
+        out << '\n';
     }
     return out.str();
 }

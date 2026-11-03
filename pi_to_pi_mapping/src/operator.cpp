@@ -6,6 +6,8 @@
 #include <csignal>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <string>
 #include <sys/socket.h>
@@ -34,7 +36,8 @@ void showMap(const ares::GridMap& map, const std::string& status) {
     std::cout << map.render() << "\n" << status << "\nCtrl+C to stop.\n" << std::flush;
 }
 
-void applyLine(const std::string& line, ares::GridMap& map, std::string& status) {
+void applyLine(const std::string& line, ares::GridMap& map,
+               std::string& status, std::ofstream* csv) {
     ares::Message msg;
     std::string error;
     if (!ares::decodeMessage(line, msg, error)) {
@@ -50,6 +53,14 @@ void applyLine(const std::string& line, ares::GridMap& map, std::string& status)
         if (map.addHazard(msg)) {
             status = "Last update: hazard #" + std::to_string(msg.id) + " (" +
                      ares::objectTypeName(msg.object_type) + ")";
+            if (msg.has_geo && csv != nullptr) {
+                *csv << msg.id << ',' << ares::objectTypeName(msg.object_type)
+                     << ',' << msg.x << ',' << msg.y << ','
+                     << std::fixed << std::setprecision(9)
+                     << msg.latitude_deg << ',' << msg.longitude_deg
+                     << ',' << msg.range_m << ',' << msg.relative_bearing_deg << '\n';
+                csv->flush();
+            }
         } else {
             status = "Discarded hazard outside grid";
         }
@@ -60,17 +71,33 @@ void applyLine(const std::string& line, ares::GridMap& map, std::string& status)
 } // namespace
 
 int main(int argc, char* argv[]) {
-    if (argc > 2) {
-        std::cerr << "Usage: " << argv[0] << " [port]\n";
+    if (argc > 3) {
+        std::cerr << "Usage: " << argv[0] << " [port] [hazards.csv]\n";
         return 1;
     }
 
     int port = ares::kDefaultPort;
-    if (argc == 2 && !parsePort(argv[1], port)) {
+    if (argc >= 2 && !parsePort(argv[1], port)) {
         std::cerr << "Invalid port (expected 1-65535)\n";
         return 1;
     }
     
+    // Optional CSV persistence of localized detections. Appends across sessions.
+    std::ofstream csv;
+    if (argc == 3) {
+        std::ifstream existing(argv[2], std::ios::binary | std::ios::ate);
+        const bool has_content = existing.good() && existing.tellg() > 0;
+        csv.open(argv[2], std::ios::app);
+        if (!csv) {
+            std::cerr << "Cannot open CSV file: " << argv[2] << '\n';
+            return 1;
+        }
+        if (!has_content) {
+            csv << "id,type,grid_x,grid_y,latitude_deg,longitude_deg,range_m,relative_bearing_deg\n";
+            csv.flush();
+        }
+    }
+
     struct sigaction interrupt_action{};
     interrupt_action.sa_handler = stopOnInterrupt;
     sigemptyset(&interrupt_action.sa_mask);
@@ -133,7 +160,7 @@ int main(int argc, char* argv[]) {
                 const std::string line = pending.substr(0, line_end);
                 pending.erase(0, line_end + 1);
                 std::string status;
-                applyLine(line, map, status);
+                applyLine(line, map, status, csv.is_open() ? &csv : nullptr);
             }
             if (pending.size() > 2048) {
                 pending.clear();

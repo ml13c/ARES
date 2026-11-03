@@ -9,30 +9,38 @@ constexpr int kGridWidth = 20;
 constexpr int kGridHeight = 10;
 constexpr int kDefaultPort = 5000;
 
-enum class MessageType {
-    Position,
-    Hazard
-};
+// Arbitrary SIMULATED anchor point used by the 20x10 field demonstration.
+// One grid cell is one meter; positive grid y is South.
+constexpr double kDemoOriginLat = 37.0;
+constexpr double kDemoOriginLon = -122.0;
+constexpr double kDemoMetersPerCell = 1.0;
 
-enum class ObjectType {
-    None,
-    Rock,
-    Weed,
-    Other
-};
+enum class MessageType { Position, Hazard };
+enum class ObjectType { None, Rock, Weed, Other };
 
-// Shared application data type. This is not a raw wire format.
 struct Message {
     MessageType message_type = MessageType::Position;
     std::uint32_t id = 0;
-    int x = 0;
+    int x = 0; // map grid cell only, not GPS
     int y = 0;
     ObjectType object_type = ObjectType::None;
+
+    bool has_geo = false;
+    double latitude_deg = 0.0;
+    double longitude_deg = 0.0;
+    double heading_deg = 0.0; // POS only, compass degrees
+    double range_m = 0.0; // HAZARD only, simulated observation
+    double relative_bearing_deg = 0.0; // HAZARD only
 };
 
-// One newline-terminated ASCII record per message:
-// POS,id,x,y\n
-// HAZARD,id,ROCK|WEED|OTHER,x,y\n
+// Old format remains readable:
+//   POS,id,x,y
+//   HAZARD,id,ROCK|WEED|OTHER,x,y
+// New extended records:
+//   POS,id,x,y,latitude,longitude,heading
+//   HAZARD,id,TYPE,x,y,latitude,longitude,range_m,bearing_deg
+// Both Pis must run the updated software for new extended messages.
+// Each record ends with a newline; commas are not supported inside fields.
 std::string encodeMessage(const Message& message);
 bool decodeMessage(const std::string& line, Message& output, std::string& error);
 const char* objectTypeName(ObjectType type);
