@@ -1,4 +1,5 @@
 #include "grid_map.hpp"
+#include "localization.hpp"
 
 #include <iomanip>
 #include <sstream>
@@ -24,6 +25,25 @@ bool GridMap::addHazard(const Message& hazard) {
     if (hazard.message_type != MessageType::Hazard ||
         !withinBounds(hazard.x, hazard.y)) return false;
     hazards_[hazard.id] = hazard;
+    return true;
+}
+
+bool GridMap::updateGps(const Message& position) {
+    if (position.message_type != MessageType::GpsPosition ||
+        !position.has_geo ||
+        !validGeoPoint({position.latitude_deg, position.longitude_deg})) return false;
+    live_gps_ = position;
+    gps_stale_ = false;
+    return true;
+}
+
+void GridMap::markGpsStale() { gps_stale_ = true; }
+
+bool GridMap::addSighting(const Message& sighting) {
+    if (sighting.message_type != MessageType::Sighting ||
+        !sighting.has_geo ||
+        !validGeoPoint({sighting.latitude_deg, sighting.longitude_deg})) return false;
+    sightings_[sighting.id] = sighting;
     return true;
 }
 
@@ -65,6 +85,26 @@ std::string GridMap::render() const {
                 << hazard.longitude_deg << ")";
         }
         out << '\n';
+    }
+    if (live_gps_) {
+        out << "\n" << (gps_stale_ ? "LAST GPS rover (STALE - DO NOT NAVIGATE): "
+                                     : "LIVE GPS rover (not drawn on simulation grid): ")
+            << std::fixed << std::setprecision(8)
+            << live_gps_->latitude_deg << ", " << live_gps_->longitude_deg;
+        if (live_gps_->has_heading)
+            out << " | course over ground: " << live_gps_->heading_deg << " deg";
+        else out << " | course: unavailable (stationary/unknown)";
+        out << '\n';
+    }
+    if (gps_stale_ && !live_gps_)
+        out << "\nGPS: NO VALID FIX - navigation must remain disabled\n";
+    out << "Sightings (rover GPS at detection; object location UNKNOWN): "
+        << sightings_.size() << '\n';
+    for (const auto& entry : sightings_) {
+        const auto& sighting = entry.second;
+        out << "  #" << sighting.id << ' ' << objectTypeName(sighting.object_type)
+            << " seen near rover GPS (" << std::fixed << std::setprecision(8)
+            << sighting.latitude_deg << ", " << sighting.longitude_deg << ")\n";
     }
     return out.str();
 }

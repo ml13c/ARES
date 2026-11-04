@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 
 namespace ares {
@@ -15,6 +16,9 @@ public:
     // Return false if a coordinate falls outside the field.
     bool updateRover(int x, int y);
     bool addHazard(const Message& hazard);
+    bool updateGps(const Message& position);
+    void markGpsStale();
+    bool addSighting(const Message& sighting);
     std::string render() const;
 
 private:
@@ -26,6 +30,9 @@ private:
     int rover_x_ = 0;
     int rover_y_ = 0;
     std::map<std::uint32_t, Message> hazards_;
+    std::optional<Message> live_gps_;
+    bool gps_stale_ = false;
+    std::map<std::uint32_t, Message> sightings_;
 };
 
 } // namespace ares

@@ -37,11 +37,41 @@ void showMap(const ares::GridMap& map, const std::string& status) {
 }
 
 void applyLine(const std::string& line, ares::GridMap& map,
-               std::string& status, std::ofstream* csv) {
+               std::string& status, std::ofstream* csv,
+               std::ofstream* sightings_csv, std::ofstream* track_csv) {
     ares::Message msg;
     std::string error;
     if (!ares::decodeMessage(line, msg, error)) {
         status = "Discarded malformed message: " + error;
+    } else if (msg.message_type == ares::MessageType::GpsStatus) {
+        map.markGpsStale();
+        status = "GPS NO FIX: no fresh receiver position (navigation must stop)";
+    } else if (msg.message_type == ares::MessageType::GpsPosition) {
+        if (!map.updateGps(msg)) {
+            status = "Discarded invalid GPS position";
+        } else {
+            status = "Last update: live GPS fix #" + std::to_string(msg.id);
+            if (track_csv) {
+                *track_csv << msg.id << ',' << std::fixed << std::setprecision(9)
+                           << msg.latitude_deg << ',' << msg.longitude_deg << ',';
+                if (msg.has_heading) *track_csv << msg.heading_deg;
+                *track_csv << '\n';
+                track_csv->flush();
+            }
+        }
+    } else if (msg.message_type == ares::MessageType::Sighting) {
+        if (!map.addSighting(msg)) {
+            status = "Discarded invalid sighting";
+        } else {
+            status = "Last update: sighting #" + std::to_string(msg.id) +
+                     " (object GPS UNKNOWN)";
+            if (sightings_csv) {
+                *sightings_csv << msg.id << ',' << ares::objectTypeName(msg.object_type)
+                               << ',' << std::fixed << std::setprecision(9)
+                               << msg.latitude_deg << ',' << msg.longitude_deg << '\n';
+                sightings_csv->flush();
+            }
+        }
     } else if (msg.message_type == ares::MessageType::Position) {
         if (map.updateRover(msg.x, msg.y)) {
             status = "Last update: rover position #" + std::to_string(msg.id);
@@ -71,8 +101,8 @@ void applyLine(const std::string& line, ares::GridMap& map,
 } // namespace
 
 int main(int argc, char* argv[]) {
-    if (argc > 3) {
-        std::cerr << "Usage: " << argv[0] << " [port] [hazards.csv]\n";
+    if (argc > 5) {
+        std::cerr << "Usage: " << argv[0] << " [port] [hazards.csv] [sightings.csv] [gps_track.csv]\n";
         return 1;
     }
 
@@ -84,7 +114,7 @@ int main(int argc, char* argv[]) {
     
     // Optional CSV persistence of localized detections. Appends across sessions.
     std::ofstream csv;
-    if (argc == 3) {
+    if (argc >= 3) {
         std::ifstream existing(argv[2], std::ios::binary | std::ios::ate);
         const bool has_content = existing.good() && existing.tellg() > 0;
         csv.open(argv[2], std::ios::app);
@@ -96,6 +126,31 @@ int main(int argc, char* argv[]) {
             csv << "id,type,grid_x,grid_y,latitude_deg,longitude_deg,range_m,relative_bearing_deg\n";
             csv.flush();
         }
+    }
+
+    std::ofstream sightings_csv;
+    if (argc >= 4) {
+        std::ifstream existing(argv[3], std::ios::binary | std::ios::ate);
+        const bool has_content = existing.good() && existing.tellg() > 0;
+        sightings_csv.open(argv[3], std::ios::app);
+        if (!sightings_csv) {
+            std::cerr << "Cannot open sightings CSV: " << argv[3] << '\n';
+            return 1;
+        }
+        if (!has_content)
+            sightings_csv << "id,type,rover_latitude_deg,rover_longitude_deg\n";
+    }
+    std::ofstream track_csv;
+    if (argc >= 5) {
+        std::ifstream existing(argv[4], std::ios::binary | std::ios::ate);
+        const bool has_content = existing.good() && existing.tellg() > 0;
+        track_csv.open(argv[4], std::ios::app);
+        if (!track_csv) {
+            std::cerr << "Cannot open GPS track CSV: " << argv[4] << '\n';
+            return 1;
+        }
+        if (!has_content)
+            track_csv << "sequence,latitude_deg,longitude_deg,course_deg\n";
     }
 
     struct sigaction interrupt_action{};
@@ -160,7 +215,9 @@ int main(int argc, char* argv[]) {
                 const std::string line = pending.substr(0, line_end);
                 pending.erase(0, line_end + 1);
                 std::string status;
-                applyLine(line, map, status, csv.is_open() ? &csv : nullptr);
+                applyLine(line, map, status, csv.is_open() ? &csv : nullptr,
+                          sightings_csv.is_open() ? &sightings_csv : nullptr,
+                          track_csv.is_open() ? &track_csv : nullptr);
             }
             if (pending.size() > 2048) {
                 pending.clear();
@@ -168,6 +225,7 @@ int main(int argc, char* argv[]) {
             }
         }
         ::close(connection);
+        map.markGpsStale();
         if (keep_running) showMap(map, "Rover disconnected. Waiting for reconnect...");
     }
 

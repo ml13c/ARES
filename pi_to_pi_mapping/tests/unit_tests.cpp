@@ -1,4 +1,5 @@
 #include "grid_map.hpp"
+#include "gps.hpp"
 #include "localization.hpp"
 #include "protocol.hpp"
 
@@ -6,6 +7,8 @@
 #include <iostream>
 #include <limits>
 #include <string>
+#include <iomanip>
+#include <sstream>
 
 namespace {
 int failures = 0;
@@ -17,6 +20,43 @@ void check(bool expression, const char* label, int line) {
     }
 }
 #define CHECK(expression) check((expression), #expression, __LINE__)
+
+std::string withChecksum(const std::string& body) {
+    unsigned int checksum = 0;
+    for (const unsigned char c : body) checksum ^= c;
+    std::ostringstream out;
+    out << '$' << body << '*' << std::uppercase << std::hex
+        << std::setw(2) << std::setfill('0') << checksum;
+    return out.str();
+}
+
+void testGpsNmea() {
+    auto rmc = ares::parseNmeaSentence(withChecksum(
+        "GPRMC,123519,A,4807.038,N,01131.000,E,2.0,84.4,230394,,,A"));
+    CHECK(rmc.has_value());
+    if (rmc) {
+        CHECK(std::abs(rmc->position.latitude_deg - 48.1173) < 1e-6);
+        CHECK(std::abs(rmc->position.longitude_deg - 11.5166666667) < 1e-6);
+        CHECK(rmc->course_deg.has_value());
+        if (rmc->course_deg) CHECK(std::abs(*rmc->course_deg - 84.4) < 1e-6);
+    }
+    auto gga = ares::parseNmeaSentence(withChecksum(
+        "GNGGA,123520,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,"));
+    CHECK(gga.has_value());
+    if (gga) CHECK(!gga->course_deg);
+    auto stationary = ares::parseNmeaSentence(withChecksum(
+        "GNRMC,123520,A,4807.038,N,01131.000,E,0.1,180.0,230394,,,A"));
+    CHECK(stationary.has_value());
+    if (stationary) CHECK(!stationary->course_deg);
+    CHECK(!ares::parseNmeaSentence(withChecksum(
+        "GPRMC,123519,V,4807.038,N,01131.000,E,2.0,84.4,230394,,,A")));
+    CHECK(!ares::parseNmeaSentence(withChecksum(
+        "GNGGA,123520,4807.038,N,01131.000,E,0,08,0.9,545.4,M,46.9,M,,")));
+    CHECK(!ares::parseNmeaSentence(withChecksum(
+        "GPRMC,123519,A,9907.038,N,01131.000,E,2.0,84.4,230394,,,A")));
+    CHECK(!ares::parseNmeaSentence("$GPRMC,123519,A,4807.038,N,01131.000,E,2.0,84.4,230394,,,A*00"));
+    CHECK(!ares::parseNmeaSentence("not NMEA"));
+}
 
 void testLocalization() {
     const ares::GeoPoint origin{37.0, -122.0};
@@ -110,6 +150,40 @@ void testProtocol() {
     CHECK(std::abs(decoded.range_m - 1.5) < 1e-9);
     CHECK(std::abs(decoded.relative_bearing_deg + 15) < 1e-9);
 
+    ares::Message gps;
+    gps.message_type = ares::MessageType::GpsPosition;
+    gps.id = 5;
+    gps.has_geo = true;
+    gps.latitude_deg = 37.0;
+    gps.longitude_deg = -122.0;
+    gps.has_heading = true;
+    gps.heading_deg = 90.0;
+    auto encoded_gps = ares::encodeMessage(gps);
+    CHECK(ares::decodeMessage(encoded_gps.substr(0, encoded_gps.size() - 1), decoded, err));
+    CHECK(decoded.message_type == ares::MessageType::GpsPosition);
+    CHECK(decoded.has_heading && decoded.has_geo);
+    gps.has_heading = false;
+    encoded_gps = ares::encodeMessage(gps);
+    CHECK(ares::decodeMessage(encoded_gps.substr(0, encoded_gps.size() - 1), decoded, err));
+    CHECK(!decoded.has_heading);
+    CHECK(!ares::decodeMessage("GPS,1,91,-122", decoded, err));
+    CHECK(!ares::decodeMessage("GPS,1,37,-122,360", decoded, err));
+    CHECK(ares::decodeMessage("GPS_STATUS,NO_FIX", decoded, err));
+    CHECK(decoded.message_type == ares::MessageType::GpsStatus);
+    CHECK(!ares::decodeMessage("GPS_STATUS,YES_FIX", decoded, err));
+    ares::Message sighting;
+    sighting.message_type = ares::MessageType::Sighting;
+    sighting.id = 17;
+    sighting.object_type = ares::ObjectType::Weed;
+    sighting.has_geo = true;
+    sighting.latitude_deg = 37.0;
+    sighting.longitude_deg = -122.0;
+    const auto sighting_encoded = ares::encodeMessage(sighting);
+    CHECK(ares::decodeMessage(sighting_encoded.substr(0, sighting_encoded.size() - 1), decoded, err));
+    CHECK(decoded.message_type == ares::MessageType::Sighting);
+    CHECK(decoded.object_type == ares::ObjectType::Weed);
+    CHECK(!ares::decodeMessage("SIGHTING,1,WEED,37,181", decoded, err));
+
     // Legacy messages are still decoded for compatibility.
     CHECK(ares::decodeMessage("POS,3,1,2", decoded, err));
     CHECK(!decoded.has_geo && decoded.id == 3);
@@ -148,6 +222,7 @@ void testGrid() {
 
 int main() {
     testLocalization();
+    testGpsNmea();
     testProtocol();
     testGrid();
     if (failures != 0) {

@@ -8,6 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(ares_shared
     src/protocol.cpp
     src/localization.cpp
+    src/gps.cpp
 )
 target_include_directories(ares_shared PUBLIC include)
 
@@ -37,5 +38,18 @@ if(BUILD_TESTING)
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration_test.py
                     $<TARGET_FILE:operator> $<TARGET_FILE:rover>)
         set_tests_properties(rover_operator_integration PROPERTIES TIMEOUT 15)
+        add_test(NAME gps_replay_integration
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gps_replay_test.py
+                    $<TARGET_FILE:operator> $<TARGET_FILE:rover>
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/demo_gps.nmea)
+        set_tests_properties(gps_replay_integration PROPERTIES TIMEOUT 15)
+        if(UNIX AND NOT APPLE)
+            add_test(NAME gps_serial_integration
+                COMMAND ${Python3_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/tests/gps_serial_test.py
+                        $<TARGET_FILE:operator> $<TARGET_FILE:rover>)
+            set_tests_properties(gps_serial_integration PROPERTIES TIMEOUT 15)
+        endif()
     endif()
 endif()

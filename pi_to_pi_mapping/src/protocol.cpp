@@ -64,7 +64,16 @@ const char* objectTypeName(ObjectType type) {
 std::string encodeMessage(const Message& message) {
     std::ostringstream out;
     out << std::setprecision(12);
-    if (message.message_type == MessageType::Position) {
+    if (message.message_type == MessageType::GpsStatus) {
+        out << "GPS_STATUS,NO_FIX";
+    } else if (message.message_type == MessageType::GpsPosition) {
+        out << "GPS," << message.id << ',' << message.latitude_deg
+            << ',' << message.longitude_deg;
+        if (message.has_heading) out << ',' << message.heading_deg;
+    } else if (message.message_type == MessageType::Sighting) {
+        out << "SIGHTING," << message.id << ',' << objectTypeName(message.object_type)
+            << ',' << message.latitude_deg << ',' << message.longitude_deg;
+    } else if (message.message_type == MessageType::Position) {
         out << "POS," << message.id << ',' << message.x << ',' << message.y;
         if (message.has_geo) {
             out << ',' << message.latitude_deg << ',' << message.longitude_deg
@@ -87,7 +96,39 @@ bool decodeMessage(const std::string& raw, Message& output, std::string& error) 
     const auto parts = splitCommaSeparated(line);
     Message parsed;
 
-    if (!parts.empty() && parts[0] == "POS" && (parts.size() == 4 || parts.size() == 7)) {
+    if (parts.size() == 2 && parts[0] == "GPS_STATUS" && parts[1] == "NO_FIX") {
+        parsed.message_type = MessageType::GpsStatus;
+    } else if (!parts.empty() && parts[0] == "GPS" &&
+        (parts.size() == 4 || parts.size() == 5)) {
+        parsed.message_type = MessageType::GpsPosition;
+        if (!parseInteger(parts[1], parsed.id) ||
+            !parseGeo(parts[2], parts[3], parsed)) {
+            error = "Invalid GPS position";
+            return false;
+        }
+        if (parts.size() == 5) {
+            if (!parseDouble(parts[4], parsed.heading_deg) ||
+                parsed.heading_deg < 0 || parsed.heading_deg >= 360) {
+                error = "Invalid GPS course";
+                return false;
+            }
+            parsed.has_heading = true;
+        }
+    } else if (!parts.empty() && parts[0] == "SIGHTING" && parts.size() == 5) {
+        parsed.message_type = MessageType::Sighting;
+        if (parts[2] == "ROCK") parsed.object_type = ObjectType::Rock;
+        else if (parts[2] == "WEED") parsed.object_type = ObjectType::Weed;
+        else if (parts[2] == "OTHER") parsed.object_type = ObjectType::Other;
+        else {
+            error = "Unknown sighting class";
+            return false;
+        }
+        if (!parseInteger(parts[1], parsed.id) ||
+            !parseGeo(parts[3], parts[4], parsed)) {
+            error = "Invalid sighting position";
+            return false;
+        }
+    } else if (!parts.empty() && parts[0] == "POS" && (parts.size() == 4 || parts.size() == 7)) {
         parsed.message_type = MessageType::Position;
         if (!parseInteger(parts[1], parsed.id) || !parseInteger(parts[2], parsed.x) ||
             !parseInteger(parts[3], parsed.y)) {
@@ -127,7 +168,7 @@ bool decodeMessage(const std::string& raw, Message& output, std::string& error) 
             return false;
         }
     } else {
-        error = "Expected POS (4/7 fields) or HAZARD (5/9 fields)";
+        error = "Expected GPS, SIGHTING, POS or HAZARD record";
         return false;
     }
 

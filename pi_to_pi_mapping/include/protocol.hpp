@@ -15,7 +15,7 @@ constexpr double kDemoOriginLat = 37.0;
 constexpr double kDemoOriginLon = -122.0;
 constexpr double kDemoMetersPerCell = 1.0;
 
-enum class MessageType { Position, Hazard };
+enum class MessageType { Position, Hazard, GpsPosition, Sighting, GpsStatus };
 enum class ObjectType { None, Rock, Weed, Other };
 
 struct Message {
@@ -28,7 +28,8 @@ struct Message {
     bool has_geo = false;
     double latitude_deg = 0.0;
     double longitude_deg = 0.0;
-    double heading_deg = 0.0; // POS only, compass degrees
+    double heading_deg = 0.0; // POS demo heading, or GPS course over ground
+    bool has_heading = false; // GPS only: course may be unavailable
     double range_m = 0.0; // HAZARD only, simulated observation
     double relative_bearing_deg = 0.0; // HAZARD only
 };
@@ -39,7 +40,13 @@ struct Message {
 // New extended records:
 //   POS,id,x,y,latitude,longitude,heading
 //   HAZARD,id,TYPE,x,y,latitude,longitude,range_m,bearing_deg
-// Both Pis must run the updated software for new extended messages.
+// Actual GPS telemetry (no fake grid position):
+//   GPS,id,latitude,longitude[,course_over_ground_deg]
+// FPGA-independent, approximate detection report (no object distance):
+//   SIGHTING,id,TYPE,rover_latitude,rover_longitude
+//   GPS_STATUS,NO_FIX (no fresh valid receiver fix)
+// SIGHTING coordinates are the ROVER position when detected, NOT object GPS.
+// Both Pis must run the updated software for these message types.
 // Each record ends with a newline; commas are not supported inside fields.
 std::string encodeMessage(const Message& message);
 bool decodeMessage(const std::string& line, Message& output, std::string& error);
