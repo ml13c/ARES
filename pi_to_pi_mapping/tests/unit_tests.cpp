@@ -1,6 +1,7 @@
 #include "grid_map.hpp"
 #include "gps.hpp"
 #include "localization.hpp"
+#include "mission.hpp"
 #include "protocol.hpp"
 
 #include <cmath>
@@ -200,6 +201,65 @@ void testProtocol() {
     CHECK(!ares::decodeMessage("POS,4,2,3,5", decoded, err));
 }
 
+void testMissionAndGeofence() {
+    const ares::GeoPoint origin{37,-122};
+    auto geo=[&](double east,double north) {
+        const auto p=ares::fromLocalOffset(origin,{east,north});
+        CHECK(p.has_value());
+        return p.value_or(origin);
+    };
+    ares::Mission m;
+    m.boundary={geo(0,0),geo(30,0),geo(30,20),geo(0,20)};
+    m.waypoints={geo(2,2),geo(28,2),geo(28,16),geo(2,16)};
+    std::string error;
+    CHECK(ares::validateMission(m,1.0,error));
+    CHECK(ares::insideFieldWithMargin(m,geo(10,10),1.0));
+    CHECK(!ares::insideFieldWithMargin(m,geo(0.1,10),1.0));
+    CHECK(!ares::insideFieldWithMargin(m,geo(50,10),1.0));
+    CHECK(!ares::validateMission(m,10.0,error));
+    ares::Mission bad=m;
+    bad.waypoints[1]=geo(40,2);
+    CHECK(!ares::validateMission(bad,1.0,error));
+    bad=m;
+    bad.boundary={geo(0,0),geo(30,20),geo(0,20),geo(30,0)};
+    CHECK(!ares::validateMission(bad,1.0,error));
+    // Concave polygon: endpoints inside but the straight segment crosses outside.
+    bad.boundary={geo(0,0),geo(30,0),geo(30,30),geo(20,30),
+                  geo(20,10),geo(10,10),geo(10,30),geo(0,30)};
+    bad.waypoints={geo(5,25),geo(25,25)};
+    CHECK(!ares::validateMission(bad,1.0,error));
+
+    ares::SimulatedNavigation nav;
+    nav.position=m.waypoints.front();
+    for (int i=0;i<500 && !nav.complete;i++)
+        CHECK(ares::stepSimulatedNavigation(m,nav,0.5,1.0));
+    CHECK(nav.complete && !nav.fault);
+    CHECK(ares::insideFieldWithMargin(m,nav.position,1.0));
+    nav={}; nav.position=geo(40,40);
+    CHECK(!ares::stepSimulatedNavigation(m,nav,0.5,1.0));
+    CHECK(nav.fault);
+
+    ares::Message msg, decoded;
+    msg.message_type=ares::MessageType::FieldBoundary;
+    msg.id=2; msg.has_geo=true;
+    msg.latitude_deg=37; msg.longitude_deg=-122;
+    auto record=ares::encodeMessage(msg);
+    CHECK(ares::decodeMessage(record.substr(0,record.size()-1),decoded,error));
+    CHECK(decoded.message_type==ares::MessageType::FieldBoundary && decoded.id==2);
+    msg.message_type=ares::MessageType::PathWaypoint;
+    record=ares::encodeMessage(msg);
+    CHECK(ares::decodeMessage(record.substr(0,record.size()-1),decoded,error));
+    CHECK(decoded.message_type==ares::MessageType::PathWaypoint);
+    msg.message_type=ares::MessageType::NavigationStatus;
+    msg.nav_state=ares::NavigationState::Complete;
+    msg.id=4;
+    record=ares::encodeMessage(msg);
+    CHECK(ares::decodeMessage(record.substr(0,record.size()-1),decoded,error));
+    CHECK(decoded.nav_state==ares::NavigationState::Complete && decoded.id==4);
+    CHECK(!ares::decodeMessage("NAV,UNKNOWN,2",decoded,error));
+    CHECK(!ares::decodeMessage("WAYPOINT,2,100,0",decoded,error));
+}
+
 void testGrid() {
     ares::GridMap map(20, 10);
     CHECK(map.updateRover(0, 0));
@@ -221,6 +281,7 @@ void testGrid() {
 } // namespace
 
 int main() {
+    testMissionAndGeofence();
     testLocalization();
     testGpsNmea();
     testProtocol();

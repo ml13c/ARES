@@ -1,11 +1,13 @@
 #pragma once
 
 #include "protocol.hpp"
+#include "localization.hpp"
 
 #include <cstdint>
 #include <map>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace ares {
 
@@ -19,10 +21,14 @@ public:
     bool updateGps(const Message& position);
     void markGpsStale();
     bool addSighting(const Message& sighting);
+    bool addMissionPoint(const Message& point);
+    bool updateNavigation(const Message& status);
+    void resetMissionDisplay();
     std::string render() const;
 
 private:
     bool withinBounds(int x, int y) const;
+    std::string renderGeoField() const;
 
     int width_;
     int height_;
@@ -33,6 +39,12 @@ private:
     std::optional<Message> live_gps_;
     bool gps_stale_ = false;
     std::map<std::uint32_t, Message> sightings_;
+    std::vector<GeoPoint> boundary_;
+    std::vector<GeoPoint> waypoints_;
+    std::vector<GeoPoint> gps_trace_;
+    NavigationState navigation_state_ = NavigationState::Running;
+    std::uint32_t navigation_target_ = 0;
+    bool has_navigation_status_ = false;
 };
 
 } // namespace ares

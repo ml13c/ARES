@@ -15,7 +15,9 @@ constexpr double kDemoOriginLat = 37.0;
 constexpr double kDemoOriginLon = -122.0;
 constexpr double kDemoMetersPerCell = 1.0;
 
-enum class MessageType { Position, Hazard, GpsPosition, Sighting, GpsStatus };
+enum class MessageType { Position, Hazard, GpsPosition, Sighting, GpsStatus,
+                         FieldBoundary, PathWaypoint, NavigationStatus };
+enum class NavigationState { Running, Complete, Fault };
 enum class ObjectType { None, Rock, Weed, Other };
 
 struct Message {
@@ -31,6 +33,7 @@ struct Message {
     double heading_deg = 0.0; // POS demo heading, or GPS course over ground
     bool has_heading = false; // GPS only: course may be unavailable
     double range_m = 0.0; // HAZARD only, simulated observation
+    NavigationState nav_state = NavigationState::Running; // NAV only
     double relative_bearing_deg = 0.0; // HAZARD only
 };
 
@@ -46,10 +49,15 @@ struct Message {
 //   SIGHTING,id,TYPE,rover_latitude,rover_longitude
 //   GPS_STATUS,NO_FIX (no fresh valid receiver fix)
 // SIGHTING coordinates are the ROVER position when detected, NOT object GPS.
+// Mission metadata and status (simulation only):
+//   BOUNDARY,index,latitude,longitude
+//   WAYPOINT,index,latitude,longitude
+//   NAV,RUNNING|COMPLETE|FAULT,next_waypoint_index
 // Both Pis must run the updated software for these message types.
 // Each record ends with a newline; commas are not supported inside fields.
 std::string encodeMessage(const Message& message);
 bool decodeMessage(const std::string& line, Message& output, std::string& error);
 const char* objectTypeName(ObjectType type);
+const char* navigationStateName(NavigationState state);
 
 } // namespace ares

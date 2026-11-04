@@ -9,6 +9,7 @@ add_library(ares_shared
     src/protocol.cpp
     src/localization.cpp
     src/gps.cpp
+    src/mission.cpp
 )
 target_include_directories(ares_shared PUBLIC include)
 
@@ -52,4 +53,14 @@ if(BUILD_TESTING)
             set_tests_properties(gps_serial_integration PROPERTIES TIMEOUT 15)
         endif()
     endif()
+endif()
+
+# Additional navigation simulation test. Does not require physical GPS or motors.
+if(BUILD_TESTING AND Python3_Interpreter_FOUND)
+    add_test(NAME mission_navigation_integration
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/mission_navigation_test.py
+                $<TARGET_FILE:operator> $<TARGET_FILE:rover>
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/data/demo_mission.csv)
+    set_tests_properties(mission_navigation_integration PROPERTIES TIMEOUT 25)
 endif()

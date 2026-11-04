@@ -43,6 +43,17 @@ void applyLine(const std::string& line, ares::GridMap& map,
     std::string error;
     if (!ares::decodeMessage(line, msg, error)) {
         status = "Discarded malformed message: " + error;
+    } else if (msg.message_type == ares::MessageType::FieldBoundary ||
+               msg.message_type == ares::MessageType::PathWaypoint) {
+        if (!map.addMissionPoint(msg)) status = "Rejected out-of-order/invalid mission point";
+        else status = "Received GPS mission " + std::string(
+            msg.message_type == ares::MessageType::FieldBoundary ? "boundary" : "waypoint") +
+            " #" + std::to_string(msg.id);
+    } else if (msg.message_type == ares::MessageType::NavigationStatus) {
+        if (!map.updateNavigation(msg)) status = "Rejected navigation status";
+        else status = std::string("Simulated navigation: ") +
+                      ares::navigationStateName(msg.nav_state) +
+                      " | next waypoint index: " + std::to_string(msg.id);
     } else if (msg.message_type == ares::MessageType::GpsStatus) {
         map.markGpsStale();
         status = "GPS NO FIX: no fresh receiver position (navigation must stop)";

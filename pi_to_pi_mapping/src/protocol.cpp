@@ -61,10 +61,26 @@ const char* objectTypeName(ObjectType type) {
     return "UNKNOWN";
 }
 
+const char* navigationStateName(NavigationState state) {
+    switch (state) {
+        case NavigationState::Running: return "RUNNING";
+        case NavigationState::Complete: return "COMPLETE";
+        case NavigationState::Fault: return "FAULT";
+    }
+    return "FAULT";
+}
+
 std::string encodeMessage(const Message& message) {
     std::ostringstream out;
     out << std::setprecision(12);
-    if (message.message_type == MessageType::GpsStatus) {
+    if (message.message_type == MessageType::FieldBoundary ||
+        message.message_type == MessageType::PathWaypoint) {
+        out << (message.message_type == MessageType::FieldBoundary ? "BOUNDARY" : "WAYPOINT")
+            << ',' << message.id << ',' << message.latitude_deg
+            << ',' << message.longitude_deg;
+    } else if (message.message_type == MessageType::NavigationStatus) {
+        out << "NAV," << navigationStateName(message.nav_state) << ',' << message.id;
+    } else if (message.message_type == MessageType::GpsStatus) {
         out << "GPS_STATUS,NO_FIX";
     } else if (message.message_type == MessageType::GpsPosition) {
         out << "GPS," << message.id << ',' << message.latitude_deg
@@ -96,7 +112,24 @@ bool decodeMessage(const std::string& raw, Message& output, std::string& error) 
     const auto parts = splitCommaSeparated(line);
     Message parsed;
 
-    if (parts.size() == 2 && parts[0] == "GPS_STATUS" && parts[1] == "NO_FIX") {
+    if (parts.size() == 4 && (parts[0] == "BOUNDARY" || parts[0] == "WAYPOINT")) {
+        parsed.message_type = parts[0] == "BOUNDARY" ? MessageType::FieldBoundary
+                                                       : MessageType::PathWaypoint;
+        if (!parseInteger(parts[1],parsed.id) || parsed.id > 1024 ||
+            !parseGeo(parts[2],parts[3],parsed)) {
+            error = "Invalid mission point";
+            return false;
+        }
+    } else if (parts.size() == 3 && parts[0] == "NAV") {
+        parsed.message_type = MessageType::NavigationStatus;
+        if (parts[1] == "RUNNING") parsed.nav_state = NavigationState::Running;
+        else if (parts[1] == "COMPLETE") parsed.nav_state = NavigationState::Complete;
+        else if (parts[1] == "FAULT") parsed.nav_state = NavigationState::Fault;
+        else { error = "Unknown navigation state"; return false; }
+        if (!parseInteger(parts[2],parsed.id) || parsed.id > 1024) {
+            error = "Invalid next waypoint index"; return false;
+        }
+    } else if (parts.size() == 2 && parts[0] == "GPS_STATUS" && parts[1] == "NO_FIX") {
         parsed.message_type = MessageType::GpsStatus;
     } else if (!parts.empty() && parts[0] == "GPS" &&
         (parts.size() == 4 || parts.size() == 5)) {
@@ -168,7 +201,7 @@ bool decodeMessage(const std::string& raw, Message& output, std::string& error) 
             return false;
         }
     } else {
-        error = "Expected GPS, SIGHTING, POS or HAZARD record";
+        error = "Expected GPS, SIGHTING, POS, HAZARD, BOUNDARY, WAYPOINT or NAV";
         return false;
     }
 
