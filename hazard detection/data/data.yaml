@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 1
+names: ['Rocks']
+
+roboflow:
+  workspace: ajay-venkat-qhcbf
+  project: rock-detection-29ywm
+  version: 3
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/ajay-venkat-qhcbf/rock-detection-29ywm/dataset/3

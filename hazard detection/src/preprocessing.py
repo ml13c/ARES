@@ -1,9 +1,8 @@
 import cv2
 import numpy as np
 from dataclasses import dataclass
-from structures import Tile, Image
-
-from structures import GrayImage, EdgeMap
+from .structures import Tile, Image
+from .structures import GrayImage, EdgeMap
 
 class SobelOperator:
     def __init__(self):
