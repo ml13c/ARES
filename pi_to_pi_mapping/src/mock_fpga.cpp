@@ -4,7 +4,8 @@
 //this just simulates the FPGA for testing purposes. It generates a random detection every 3-7 rover position updates, with a random type of hazard.
 namespace ares {
 
-MockFPGA::MockFPGA() : rng_(std::random_device{}()) {
+// Fixed seed makes repeatable simulation runs and integration tests.
+MockFPGA::MockFPGA() : rng_(0xA2E5u) {
     // First detection occurs after 3 to 7 rover-position messages.
     next_detection_step_ = std::uniform_int_distribution<std::uint32_t>(3, 7)(rng_);
 }

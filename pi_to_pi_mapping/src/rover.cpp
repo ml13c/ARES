@@ -1,7 +1,11 @@
 #include "protocol.hpp"
 #include "mock_fpga.hpp"
+#include "localization.hpp"
+#include "gps.hpp"
+#include "mission.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <arpa/inet.h>
 #include <cerrno>
 #include <chrono>
@@ -9,8 +13,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <fstream>
+#include <memory>
 #include <limits>
-#include <random>
 #include <string>
 #include <sys/socket.h>
 #include <thread>
@@ -34,6 +39,20 @@ bool parsePort(const char* text, int& port) {
     }
 }
 
+bool parsePositiveCount(const char* text, std::uint32_t& value) {
+    try {
+        const std::string raw(text);
+        std::size_t consumed = 0;
+        const unsigned long long parsed = std::stoull(raw, &consumed);
+        if (consumed != raw.size() || parsed == 0 ||
+            parsed > std::numeric_limits<std::uint32_t>::max()) return false;
+        value = static_cast<std::uint32_t>(parsed);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 // TCP is a byte stream: one send() is not guaranteed to send all bytes.
 bool sendAll(int fd, const std::string& message) {
     std::size_t sent = 0;
@@ -51,6 +70,55 @@ bool sendAll(int fd, const std::string& message) {
     return true;
 }
 
+struct GpsOptions {
+    bool enabled = false;
+    bool serial = false;
+    std::string source;
+    int baud = 9600;
+    bool mock_detections = false;
+    std::uint32_t steps = 0;
+    std::uint32_t interval_ms = 1000;
+};
+
+bool gpsOptions(int argc, char* argv[], GpsOptions& config) {
+    // GPS mode keeps the legacy 4-positional-argument rover command intact.
+    if (argc < 5 || (std::string(argv[3]) != "--gps-replay" &&
+                     std::string(argv[3]) != "--gps-serial")) return false;
+    config.enabled = true;
+    config.serial = std::string(argv[3]) == "--gps-serial";
+    config.source = argv[4];
+    for (int i = 5; i < argc; ++i) {
+        const std::string flag = argv[i];
+        if (flag == "--mock-detections") {
+            config.mock_detections = true;
+        } else if ((flag == "--baud" || flag == "--steps" ||
+                    flag == "--interval-ms") && i + 1 < argc) {
+            const char* val = argv[++i];
+            if (flag == "--baud") {
+                int baud = 0;
+                if (!parsePort(val, baud)) return false;
+                config.baud = baud;
+            } else if (flag == "--steps") {
+                if (!parsePositiveCount(val, config.steps)) return false;
+            } else if (!parsePositiveCount(val, config.interval_ms)) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    return !(config.serial && config.interval_ms != 1000);
+}
+
+void sleepInterval(std::uint32_t interval_ms) {
+    std::uint32_t slept_ms = 0;
+    while (slept_ms < interval_ms && keep_running) {
+        const auto chunk = std::min(100u, interval_ms - slept_ms);
+        std::this_thread::sleep_for(std::chrono::milliseconds(chunk));
+        slept_ms += chunk;
+    }
+}
+
 bool transmit(int fd, const ares::Message& message) {
     const std::string record = ares::encodeMessage(message);
     if (!sendAll(fd, record)) return false;
@@ -58,17 +126,284 @@ bool transmit(int fd, const ares::Message& message) {
     return true;
 }
 
+
+struct MissionOptions {
+    std::string filename;
+    double speed_mps = 2.0;
+    double margin_m = 1.0;
+    std::uint32_t interval_ms = 200;
+    std::uint32_t steps = 0; // 0: entire mission
+    bool mock_detections = false;
+};
+
+bool parseFiniteDouble(const std::string& raw, double& result) {
+    try {
+        std::size_t consumed = 0;
+        result = std::stod(raw, &consumed);
+        return consumed == raw.size() && std::isfinite(result);
+    } catch (...) { return false; }
+}
+
+bool missionOptions(int argc, char* argv[], MissionOptions& config) {
+    if (argc < 5 || std::string(argv[3]) != "--mission-sim") return false;
+    config.filename = argv[4];
+    for (int i=5;i<argc;++i) {
+        const std::string flag=argv[i];
+        if (flag == "--mock-detections") config.mock_detections=true;
+        else if ((flag == "--speed-mps" || flag == "--margin-m" ||
+                  flag == "--interval-ms" || flag == "--steps") && i+1<argc) {
+            const std::string value=argv[++i];
+            if (flag == "--speed-mps") {
+                if (!parseFiniteDouble(value,config.speed_mps) ||
+                    config.speed_mps < 0.1 || config.speed_mps > 30.0) return false;
+            } else if (flag == "--margin-m") {
+                if (!parseFiniteDouble(value,config.margin_m) ||
+                    config.margin_m < 0.25 || config.margin_m > 100.0) return false;
+            } else if (flag == "--interval-ms") {
+                if (!parsePositiveCount(value.c_str(),config.interval_ms) ||
+                    config.interval_ms > 10000) return false;
+            } else if (!parsePositiveCount(value.c_str(),config.steps)) return false;
+        } else return false;
+    }
+    return true;
+}
+
+bool runMissionSimulation(int fd, const ares::Mission& mission,
+                          const MissionOptions& options) {
+    std::cout << "SIMULATION ONLY: ideal GPS waypoint tracker; NO motor commands, "
+                 "real GNSS guidance or FPGA ranging.\n";
+    for (std::size_t i=0;i<mission.boundary.size();++i) {
+        ares::Message point;
+        point.message_type=ares::MessageType::FieldBoundary;
+        point.id=static_cast<std::uint32_t>(i);
+        point.has_geo=true;
+        point.latitude_deg=mission.boundary[i].latitude_deg;
+        point.longitude_deg=mission.boundary[i].longitude_deg;
+        if (!transmit(fd,point)) return false;
+    }
+    for (std::size_t i=0;i<mission.waypoints.size();++i) {
+        ares::Message point;
+        point.message_type=ares::MessageType::PathWaypoint;
+        point.id=static_cast<std::uint32_t>(i);
+        point.has_geo=true;
+        point.latitude_deg=mission.waypoints[i].latitude_deg;
+        point.longitude_deg=mission.waypoints[i].longitude_deg;
+        if (!transmit(fd,point)) return false;
+    }
+
+    ares::SimulatedNavigation nav;
+    nav.position=mission.waypoints.front();
+    ares::MockFPGA mock;
+    std::uint32_t sequence=0;
+    std::size_t last_target=0;
+    while (keep_running && !nav.complete && !nav.fault) {
+        if (nav.next_waypoint != last_target) {
+            ares::Message status;
+            status.message_type=ares::MessageType::NavigationStatus;
+            status.id=static_cast<std::uint32_t>(nav.next_waypoint);
+            status.nav_state=ares::NavigationState::Running;
+            if (!transmit(fd,status)) return false;
+            last_target=nav.next_waypoint;
+        }
+        ares::Message gps;
+        gps.message_type=ares::MessageType::GpsPosition;
+        gps.id=sequence;
+        gps.has_geo=true;
+        gps.latitude_deg=nav.position.latitude_deg;
+        gps.longitude_deg=nav.position.longitude_deg;
+        gps.has_heading=true; // simulated direction, not a real sensor heading
+        gps.heading_deg=nav.heading_deg;
+        if (!transmit(fd,gps)) return false;
+        if (options.mock_detections) {
+            if (const auto detection=mock.poll(sequence)) {
+                ares::Message sighting;
+                sighting.message_type=ares::MessageType::Sighting;
+                sighting.id=detection->id;
+                sighting.object_type=detection->type;
+                sighting.has_geo=true;
+                sighting.latitude_deg=nav.position.latitude_deg;
+                sighting.longitude_deg=nav.position.longitude_deg;
+                if (!transmit(fd,sighting)) return false;
+            }
+        }
+        ++sequence;
+        if (options.steps>0 && sequence>=options.steps) break;
+        const double step_m=options.speed_mps*options.interval_ms/1000.0;
+        if (!ares::stepSimulatedNavigation(mission,nav,step_m,options.margin_m)) {
+            std::cerr << "SIMULATED GEOFENCE FAULT: position outside approved area.\n";
+            break;
+        }
+        if (!nav.complete) sleepInterval(options.interval_ms);
+    }
+    if (nav.complete || nav.fault) {
+        // Final fix at last waypoint, or last safe known position on fault.
+        ares::Message gps;
+        gps.message_type=ares::MessageType::GpsPosition;
+        gps.id=sequence;
+        gps.has_geo=true;
+        gps.latitude_deg=nav.position.latitude_deg;
+        gps.longitude_deg=nav.position.longitude_deg;
+        gps.has_heading=true;
+        gps.heading_deg=nav.heading_deg;
+        if (!transmit(fd,gps)) return false;
+        ares::Message status;
+        status.message_type=ares::MessageType::NavigationStatus;
+        status.nav_state=nav.fault ? ares::NavigationState::Fault
+                                   : ares::NavigationState::Complete;
+        status.id=static_cast<std::uint32_t>(nav.next_waypoint);
+        if (!transmit(fd,status)) return false;
+    }
+    std::cout << "Waypoint simulation ended: " << sequence << " updates, "
+              << (nav.complete ? "COMPLETE" : nav.fault ? "GEOFENCE FAULT" : "STOPPED EARLY")
+              << ".\n";
+    return !nav.fault;
+}
+
+// True GPS/replay mode intentionally does not invent grid coordinates or
+// hazard range. Position messages and sightings have their own protocol types.
+bool runGpsMode(int fd, const GpsOptions& options) {
+    std::ifstream replay;
+    ares::GpsSerial serial;
+    if (options.serial) {
+        std::string error;
+        if (!serial.openDevice(options.source, options.baud, error)) {
+            std::cerr << "GPS serial: " << error << '\n';
+            return false;
+        }
+        std::cout << "Live NMEA GPS on " << options.source << " at "
+                  << options.baud << " baud. Waiting for a valid fix...\n";
+    } else {
+        replay.open(options.source);
+        if (!replay) {
+            std::cerr << "Cannot open NMEA replay file: " << options.source << '\n';
+            return false;
+        }
+        std::cout << "Replaying NMEA GPS from " << options.source << '\n';
+    }
+    ares::MockFPGA mock;
+    std::uint32_t sequence = 0;
+    bool warned_no_fix = false;
+    auto last_fix = std::chrono::steady_clock::now();
+    while (keep_running) {
+        std::optional<ares::GpsFix> fix;
+        if (options.serial) {
+            fix = serial.nextFix(250);
+            if (!serial.connected()) {
+                std::cerr << "GPS device disconnected; stopping rover feed\n";
+                ares::Message lost;
+                lost.message_type = ares::MessageType::GpsStatus;
+                transmit(fd, lost);
+                return false;
+            }
+            const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - last_fix).count();
+            if (!fix && elapsed >= 3 && !warned_no_fix) {
+                std::cerr << "[GPS] No valid fix received for 3 seconds; "
+                             "position transmission paused\n";
+                warned_no_fix = true;
+                ares::Message lost;
+                lost.message_type = ares::MessageType::GpsStatus;
+                if (!transmit(fd, lost)) return false;
+            }
+        } else {
+            std::string line;
+            while (std::getline(replay, line)) {
+                fix = ares::parseNmeaSentence(line);
+                if (fix) break;
+            }
+            if (!fix) break; // replay ended without a usable new fix
+        }
+        if (!fix) continue;
+        last_fix = std::chrono::steady_clock::now();
+        warned_no_fix = false;
+
+        ares::Message position;
+        position.message_type = ares::MessageType::GpsPosition;
+        position.id = sequence;
+        position.has_geo = true;
+        position.latitude_deg = fix->position.latitude_deg;
+        position.longitude_deg = fix->position.longitude_deg;
+        position.has_heading = fix->course_deg.has_value();
+        if (fix->course_deg) position.heading_deg = *fix->course_deg;
+        if (!transmit(fd, position)) return false;
+
+        if (options.mock_detections) {
+            if (const auto detection = mock.poll(sequence)) {
+                // Classification-only observations: these are *rover* GPS
+                // coordinates at detection time, NOT localized object GPS.
+                ares::Message sighting;
+                sighting.message_type = ares::MessageType::Sighting;
+                sighting.id = detection->id;
+                sighting.object_type = detection->type;
+                sighting.has_geo = true;
+                sighting.latitude_deg = fix->position.latitude_deg;
+                sighting.longitude_deg = fix->position.longitude_deg;
+                if (!transmit(fd, sighting)) return false;
+            }
+        }
+        ++sequence;
+        if (options.steps > 0 && sequence >= options.steps) break;
+        if (!options.serial) sleepInterval(options.interval_ms);
+    }
+    std::cout << "GPS rover feed completed: " << sequence << " position fixes sent.\n";
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
-    if (argc < 2 || argc > 3) {
-        std::cerr << "Usage: " << argv[0] << " <operator-ipv4> [port]\n";
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " <operator-ipv4> [port] [steps] [interval-ms]\n"
+                  << "  or: " << argv[0] << " <operator-ipv4> <port> --gps-replay FILE "
+                     "[--steps N] [--interval-ms N] [--mock-detections]\n"
+                  << "  or: " << argv[0] << " <operator-ipv4> <port> --gps-serial DEVICE "
+                     "[--baud 9600] [--steps N] [--mock-detections]\n"
+                  << "  or: " << argv[0] << " <operator-ipv4> <port> --mission-sim FILE "
+                     "[--speed-mps 2] [--margin-m 1] [--interval-ms 200] "
+                     "[--mock-detections] [--steps N]\n";
+        return 1;
+    }
+    MissionOptions mission_options;
+    const bool mission_mode=argc>=4 && std::string(argv[3])=="--mission-sim";
+    ares::Mission mission;
+    if (mission_mode) {
+        if (!missionOptions(argc,argv,mission_options)) {
+            std::cerr << "Invalid --mission-sim arguments. See GPS_README.md.\n";
+            return 1;
+        }
+        std::string error;
+        if (!ares::loadMissionCsv(mission_options.filename,mission,error) ||
+            !ares::validateMission(mission,mission_options.margin_m,error)) {
+            std::cerr << "UNSAFE MISSION REJECTED: " << error << '\n';
+            return 1;
+        }
+    }
+    GpsOptions gps;
+    const bool gps_mode = argc >= 4 && std::string(argv[3]).rfind("--gps-", 0) == 0;
+    if (gps_mode && !gpsOptions(argc, argv, gps)) {
+        std::cerr << "Invalid GPS arguments. Use --gps-replay FILE or --gps-serial DEVICE.\n";
+        return 1;
+    }
+    if (!gps_mode && !mission_mode && argc > 5) {
+        std::cerr << "Too many positional arguments for simulated rover\n";
         return 1;
     }
 
     int port = ares::kDefaultPort;
-    if (argc == 3 && !parsePort(argv[2], port)) {
+    if (argc >= 3 && !parsePort(argv[2], port)) {
         std::cerr << "Invalid port (expected 1-65535)\n";
+        return 1;
+    }
+
+    // steps=0 means run until Ctrl+C (default). Test mode uses a finite count.
+    std::uint32_t max_steps = 0;
+    std::uint32_t interval_ms = 1000;
+    if (!gps_mode && !mission_mode && argc >= 4 && !parsePositiveCount(argv[3], max_steps)) {
+        std::cerr << "Invalid steps (expected positive integer)\n";
+        return 1;
+    }
+    if (!gps_mode && !mission_mode && argc >= 5 && !parsePositiveCount(argv[4], interval_ms)) {
+        std::cerr << "Invalid interval-ms (expected positive integer)\n";
         return 1;
     }
 
@@ -98,13 +433,22 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::cout << "Connected to operator " << argv[1] << ':' << port << '\n'
-              << "Generating simulated positions every second. Ctrl+C to stop.\n";
+    std::cout << "Connected to operator " << argv[1] << ':' << port << '\n';
+    if (mission_mode) {
+        const bool okay = runMissionSimulation(fd, mission, mission_options);
+        ::close(fd);
+        return okay ? 0 : 1;
+    }
+    if (gps_mode) {
+        const bool okay = runGpsMode(fd, gps);
+        ::close(fd);
+        return okay ? 0 : 1;
+    }
+    std::cout << "Simulated scout mode: GPS coordinates + mock detections. "
+              << "Ctrl+C to stop.\n";
 
     ares::MockFPGA mock_fpga;
-    std::mt19937 location_rng(std::random_device{}());
-    std::uniform_int_distribution<int> forward_cells(1, 2);
-    std::uniform_int_distribution<int> sideways_cells(-1, 1);
+    const ares::GeoPoint anchor{ares::kDemoOriginLat, ares::kDemoOriginLon};
 
     std::uint32_t sequence = 0;
     while (keep_running) {
@@ -115,7 +459,21 @@ int main(int argc, char* argv[]) {
         const int x = left_to_right ? column : (ares::kGridWidth - 1 - column);
         const int y = row;
 
+        // Demonstration-only GPS from grid cell coordinates, not an actual GPS receiver.
+        const auto rover_geo = ares::fromLocalOffset(anchor,
+            {x * ares::kDemoMetersPerCell, -y * ares::kDemoMetersPerCell});
+        if (!rover_geo) {
+            std::cerr << "Unable to calculate simulated rover GPS position\n";
+            break;
+        }
+        const double heading_deg = left_to_right ? 90.0 : 270.0;
+        const ares::RobotPose rover_pose{*rover_geo, heading_deg};
+
         ares::Message position;
+        position.has_geo = true;
+        position.latitude_deg = rover_geo->latitude_deg;
+        position.longitude_deg = rover_geo->longitude_deg;
+        position.heading_deg = heading_deg;
         position.message_type = ares::MessageType::Position;
         position.id = sequence;
         position.x = x;
@@ -132,30 +490,58 @@ int main(int argc, char* argv[]) {
                       << ares::objectTypeName(detection->type)
                       << " (#" << detection->id << ")\n";
 
-            // Fake object location in front of / near the rover. This is NOT
-            // GPS localization or a model of real camera/range geometry.
-            const int forward = left_to_right ? 1 : -1;
-            const int estimated_x = std::clamp(
-                x + forward * forward_cells(location_rng), 0, ares::kGridWidth - 1);
-            const int estimated_y = std::clamp(
-                y + sideways_cells(location_rng), 0, ares::kGridHeight - 1);
-
-            ares::Message hazard;
-            hazard.message_type = ares::MessageType::Hazard;
-            hazard.id = detection->id;
-            hazard.object_type = detection->type;
-            hazard.x = estimated_x;
-            hazard.y = estimated_y;
-            if (!transmit(fd, hazard)) {
-                std::perror("send hazard");
-                break;
+            // SIMULATED measurement: one meter directly ahead of the rover.
+            // A real FPGA/classifier output is not enough to know distance;
+            // real use requires camera calibration/depth, range sensor, etc.
+            const double range_m = 1.0;
+            const double relative_bearing_deg = 0.0;
+            const auto hazard_geo = ares::localizeObject(
+                rover_pose, range_m, relative_bearing_deg);
+            if (!hazard_geo) {
+                std::cerr << "Invalid mock detection geometry; skipping\n";
+            } else {
+                const auto local = ares::toLocalOffset(anchor, *hazard_geo);
+                if (!local) {
+                    std::cerr << "Unable to map localized hazard; skipping\n";
+                } else {
+                    // The ASCII grid is only a display of GPS-based coordinates.
+                    const int hazard_x = static_cast<int>(std::lround(
+                        local->east_m / ares::kDemoMetersPerCell));
+                    const int hazard_y = static_cast<int>(std::lround(
+                        -local->north_m / ares::kDemoMetersPerCell));
+                    if (hazard_x < 0 || hazard_x >= ares::kGridWidth ||
+                        hazard_y < 0 || hazard_y >= ares::kGridHeight) {
+                        std::cout << "[Mock detection outside field grid; skipped]\n";
+                    } else {
+                        ares::Message hazard;
+                        hazard.message_type = ares::MessageType::Hazard;
+                        hazard.id = detection->id;
+                        hazard.object_type = detection->type;
+                        hazard.x = hazard_x;
+                        hazard.y = hazard_y;
+                        hazard.has_geo = true;
+                        hazard.latitude_deg = hazard_geo->latitude_deg;
+                        hazard.longitude_deg = hazard_geo->longitude_deg;
+                        hazard.range_m = range_m;
+                        hazard.relative_bearing_deg = relative_bearing_deg;
+                        if (!transmit(fd, hazard)) {
+                            std::perror("send hazard");
+                            break;
+                        }
+                    }
+                }
             }
         }
 
         ++sequence;
-        // so ctrl c can work
-        for (int i = 0; i < 10 && keep_running; ++i)
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (max_steps > 0 && sequence >= max_steps) break;
+        // Short sleep chunks allow Ctrl+C to stop the demo quickly.
+        std::uint32_t slept_ms = 0;
+        while (slept_ms < interval_ms && keep_running) {
+            const std::uint32_t chunk = std::min(100u, interval_ms - slept_ms);
+            std::this_thread::sleep_for(std::chrono::milliseconds(chunk));
+            slept_ms += chunk;
+        }
     }
 
     ::close(fd);
