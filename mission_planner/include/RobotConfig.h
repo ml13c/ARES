@@ -4,16 +4,12 @@
 
 struct RobotConfig
 {
+    double robotWidth = 0.0;
 
-    double robotWidth;
+    double safetyMargin = 0.0;
 
-    double safetyMargin;
-
-    double maxSpeed;
-
+    double maxSpeed = 0.0;
 };
 
 
 #endif
-
-/*Later include specs of robot*/
